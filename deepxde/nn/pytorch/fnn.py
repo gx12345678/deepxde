@@ -150,7 +150,8 @@ class PFNN(NN):
         if self._output_transform is not None:
             x = self._output_transform(inputs, x)
         return x
-    class Muti_PFNN(NN):
+  
+class Muti_PFNN(NN):
 
         
         
