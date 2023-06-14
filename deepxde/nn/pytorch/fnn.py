@@ -150,3 +150,102 @@ class PFNN(NN):
         if self._output_transform is not None:
             x = self._output_transform(inputs, x)
         return x
+    class Muti_PFNN(NN):
+
+        
+        
+
+    def __init__(self, layer_sizes, activation, kernel_initializer):
+        super().__init__()
+        self.activation = activations.get(activation)
+        initializer = initializers.get(kernel_initializer)
+        initializer_zero = initializers.get("zeros")
+
+        if len(layer_sizes) <= 1:
+            raise ValueError("must specify input and output sizes")
+        if not isinstance(layer_sizes[0], int):
+            raise ValueError("input size must be integer")
+        if not isinstance(layer_sizes[-1], int):
+            raise ValueError("output size must be integer")
+
+        n_output = layer_sizes[-1]
+
+        def make_linear(n_input, n_output):
+            linear = torch.nn.Linear(n_input, n_output, dtype=config.real(torch))
+            initializer(linear.weight)
+            initializer_zero(linear.bias)
+            return linear
+
+        self.layers = torch.nn.ModuleList()
+        for i in range(1, len(layer_sizes) - 1):
+            prev_layer_size = layer_sizes[i - 1]
+            curr_layer_size = layer_sizes[i]
+            if isinstance(curr_layer_size, (list, tuple)):
+                if len(curr_layer_size) != n_output:
+                    raise ValueError(
+                        "number of sub-layers should equal number of network outputs"
+                    )
+                if isinstance(prev_layer_size, (list, tuple)):
+                    # e.g. [8, 8, 8] -> [16, 16, 16]
+                    self.layers.append(
+                        torch.nn.ModuleList(
+                            [
+                                make_linear(prev_layer_size[j], curr_layer_size[j])
+                                for j in range(n_output)
+                            ]
+                        )
+                    )
+                else:  # e.g. 64 -> [8, 8, 8]
+                    self.layers.append(
+                        torch.nn.ModuleList(
+                            [
+                                make_linear(prev_layer_size, curr_layer_size[j])
+                                for j in range(n_output)
+                            ]
+                        )
+                    )
+            else:  # e.g. 64 -> 64
+                if not isinstance(prev_layer_size, int):
+                    raise ValueError(
+                        "cannot rejoin parallel subnetworks after splitting"
+                    )
+                self.layers.append(make_linear(prev_layer_size, curr_layer_size))
+
+        # output layers
+        if isinstance(layer_sizes[-2], (list, tuple)):  # e.g. [3, 3, 3] -> 3
+            self.layers.append(
+                torch.nn.ModuleList(
+                    [make_linear(layer_sizes[-2][j], 1) for j in range(n_output)]
+                )
+            )
+        else:
+            self.layers.append(make_linear(layer_sizes[-2], n_output))
+
+    def forward(self, inputs):
+        # Assuming `inputs` is a list of tensors.
+        x = [input_ for input_ in inputs]
+        if self._input_transform is not None:
+            x = [self._input_transform(x_) for x_ in x]
+
+        for layer in self.layers[:-1]:
+            if isinstance(layer, torch.nn.ModuleList):
+                if isinstance(x, list):
+                    x = [self.activation(f(x_)) for f, x_ in zip(layer, x)]
+                else:
+                    x = [self.activation(f(x_)) for f in layer]
+            else:
+                # Assuming that at this point x is a list of tensors that we want to concat.
+                x = torch.cat(x, dim=1)
+                x = self.activation(layer(x))
+
+        # output layers
+        if isinstance(x, list):
+            x = torch.cat([f(x_) for f, x_ in zip(self.layers[-1], x)], dim=1)
+        else:
+            x = self.layers[-1](x)
+
+        if self._output_transform is not None:
+            # Assuming `inputs` is a list of tensors.
+            x = self._output_transform(inputs, x)
+        return x
+
